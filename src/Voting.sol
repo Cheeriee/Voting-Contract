@@ -65,17 +65,6 @@ contract Voting {
     emit CardIssued(voter);
    }
 
-   function addCandidate(string memory name) external onlyAdmin {
-    candidateCount++;
-    candidates[candidateCount] = Candidate({
-        id: candidateCount,
-        name: name,
-        votes: 0
-    });
-
-    emit CandidateAdded(candidateCount, name);
-   }
-
    function vote(uint256 candidateId) external votingOpen {
         VoterCard memory card = voterCards[msg.sender];
 
@@ -98,14 +87,6 @@ contract Voting {
     function getCandidate(uint256 id) external view returns (string memory name, uint256 votes) {
         Candidate memory candidate = candidates[id];
         return (candidate.name, candidate.votes);
-    }
-
-    function getAllCandidates() external view returns (Candidate[] memory) {
-        Candidate[] memory list = new Candidate[](candidateCount);
-        for (uint256 i = 1; i <= candidateCount; i++) {
-            list[i - 1] = candidates[i];
-        }
-        return list;
     }
 
     function hasVoterVoted(address voter) external view returns (bool) {
