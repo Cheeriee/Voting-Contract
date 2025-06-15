@@ -1,0 +1,429 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.26;
+
+import "forge-std/Test.sol";
+import "../src/Ballot.sol";
+
+contract BallotTest is Test {
+    Ballot ballot;
+    address admin = address(0x1);
+    address voter1 = address(0x2);
+    address voter2 = address(0x3);
+    address voter3 = address(0x4);
+    address nonAdmin = address(0x5);
+    uint256 votingStart = block.timestamp + 1 days;
+    uint256 cardExpiry = block.timestamp + 30 days;
+
+    function setUp() public {
+        vm.prank(admin);
+        ballot = new Ballot(votingStart);
+    }
+
+    // Test constructor initialization
+    function testConstructor() public {
+        assertEq(ballot.admin(), admin, "Admin should be set correctly");
+        assertEq(ballot.votingStart(), votingStart, "Voting start should be set correctly");
+        assertFalse(ballot.votingEnded(), "Voting should not be ended");
+        assertFalse(ballot.hasGenderVotingRestriction(), "No gender restriction initially");
+        assertEq(ballot.candidateCount(), 0, "Candidate count should be 0");
+        assertEq(ballot.balloterCount(), 0, "Balloter count should be 0");
+    }
+
+    // Test adding a candidate
+    function testAddCandidate() public {
+        vm.prank(admin);
+        vm.expectEmit(true, false, false, true);
+        emit CandidateAdded(1, "Alice");
+        ballot.addCandidate("Alice");
+        assertEq(ballot.candidateCount(), 1, "Candidate count should be 1");
+        (uint256 id, string memory name, uint256 votes) = ballot.candidates(1);
+        assertEq(id, 1, "Candidate ID should be 1");
+        assertEq(name, "Alice", "Candidate name should be Alice");
+        assertEq(votes, 0, "Candidate votes should be 0");
+    }
+
+    // Test non-admin cannot add candidate
+    function testAddCandidateNonAdmin() public {
+        vm.prank(nonAdmin);
+        vm.expectRevert(Ballot.NotAdmin.selector);
+        ballot.addCandidate("Alice");
+    }
+
+    // Test restricting voting to Male
+    function testRestrictVotingToGenderMale() public {
+        vm.prank(admin);
+        vm.expectEmit(false, false, false, true);
+        emit VotingRestrictedToGender(Ballot.Gender.Male);
+        ballot.restrictVotingToGender(Ballot.Gender.Male);
+        assertTrue(ballot.hasGenderVotingRestriction(), "Gender restriction should be set");
+        assertEq(uint256(ballot.votingRestrictedTo()), 0, "Voting restricted to Male");
+    }
+
+    // Test restricting voting to Female
+    function testRestrictVotingToGenderFemale() public {
+        vm.prank(admin);
+        vm.expectEmit(false, false, false, true);
+        emit VotingRestrictedToGender(Ballot.Gender.Female);
+        ballot.restrictVotingToGender(Ballot.Gender.Female);
+        assertTrue(ballot.hasGenderVotingRestriction(), "Gender restriction should be set");
+        assertEq(uint256(ballot.votingRestrictedTo()), 1, "Voting restricted to Female");
+    }
+
+    // Test invalid gender restriction
+    function testRestrictVotingToGenderInvalid() public {
+        vm.prank(admin);
+        vm.expectRevert(Ballot.InvalidGender.selector);
+        ballot.restrictVotingToGender(Ballot.Gender(2));
+    }
+
+    // Test non-admin cannot restrict voting
+    function testRestrictVotingToGenderNonAdmin() public {
+        vm.prank(nonAdmin);
+        vm.expectRevert(Ballot.NotAdmin.selector);
+        ballot.restrictVotingToGender(Ballot.Gender.Male);
+    }
+
+    // Test removing gender restriction
+    function testRemoveGenderRestriction() public {
+        vm.prank(admin);
+        ballot.restrictVotingToGender(Ballot.Gender.Male);
+        vm.prank(admin);
+        vm.expectEmit(false, false, false, true);
+        emit VotingRestrictedToGender(Ballot.Gender.Male);
+        ballot.removeGenderRestriction();
+        assertFalse(ballot.hasGenderVotingRestriction(), "Gender restriction should be removed");
+    }
+
+    // Test non-admin cannot remove gender restriction
+    function testRemoveGenderRestrictionNonAdmin() public {
+        vm.prank(nonAdmin);
+        vm.expectRevert(Ballot.NotAdmin.selector);
+        ballot.removeGenderRestriction();
+    }
+
+    // Test registering a male balloter
+    function testRegisterBalloterMale() public {
+        vm.prank(admin);
+        vm.expectEmit(true, false, false, true);
+        emit BalloterRegistered(voter1, 25, true, Ballot.Gender.Male);
+        ballot.registerBalloter(voter1, true, 25, 0, true, cardExpiry);
+        assertEq(ballot.balloterCount(), 1, "Balloter count should be 1");
+        (address balloter, bool isDisabled, uint256 age, Ballot.Gender gender, bool valid, uint256 expiry) = ballot.balloters(voter1);
+        assertEq(balloter, voter1, "Balloter address should match");
+        assertTrue(isDisabled, "Balloter should be disabled");
+        assertEq(age, 25, "Balloter age should be 25");
+        assertEq(uint256(gender), 0, "Balloter gender should be Male");
+        assertTrue(valid, "Balloter should be valid");
+        assertEq(expiry, cardExpiry, "Balloter expiry should match");
+    }
+
+    // Test registering a female balloter
+    function testRegisterBalloterFemale() public {
+        vm.prank(admin);
+        vm.expectEmit(true, false, false, true);
+        emit BalloterRegistered(voter1, 25, false, Ballot.Gender.Female);
+        ballot.registerBalloter(voter1, false, 25, 1, true, cardExpiry);
+        assertEq(ballot.balloterCount(), 1, "Balloter count should be 1");
+        (,,, Ballot.Gender gender,,) = ballot.balloters(voter1);
+        assertEq(uint256(gender), 1, "Balloter gender should be Female");
+    }
+
+    // Test invalid balloter registration
+    function testRegisterBalloterInvalid() public {
+        vm.prank(admin);
+        ballot.registerBalloter(voter1, true, 25, 0, true, cardExpiry);
+        vm.prank(admin);
+        vm.expectRevert(Ballot.InvalidCard.selector);
+        ballot.registerBalloter(voter1, true, 25, 0, true, cardExpiry);
+
+        vm.prank(admin);
+        vm.expectRevert(Ballot.UnderAge.selector);
+        ballot.registerBalloter(voter2, true, 17, 0, true, cardExpiry);
+
+        vm.prank(admin);
+        vm.expectRevert(Ballot.CardExpired.selector);
+        ballot.registerBalloter(voter2, true, 25, 0, true, block.timestamp - 1);
+
+        vm.prank(admin);
+        vm.expectRevert(Ballot.InvalidGender.selector);
+        ballot.registerBalloter(voter2, true, 25, 2, true, cardExpiry);
+    }
+
+    // Test non-admin cannot register balloter
+    function testRegisterBalloterNonAdmin() public {
+        vm.prank(nonAdmin);
+        vm.expectRevert(Ballot.NotAdmin.selector);
+        ballot.registerBalloter(voter1, true, 25, 0, true, cardExpiry);
+    }
+
+    // Test voting without gender restriction
+    function testCastVoteNoRestriction() public {
+        vm.prank(admin);
+        ballot.addCandidate("Alice");
+        vm.prank(admin);
+        ballot.registerBalloter(voter1, true, 25, 0, true, cardExpiry);
+        ballot.registerBalloter(voter2, true, 25, 1, true, cardExpiry);
+        vm.warp(votingStart + 1);
+        vm.prank(voter1);
+        vm.expectEmit(true, true, false, true);
+        emit VoteCasted(voter1, 1);
+        ballot.castVote(voter1, 1); // Male voter
+        vm.prank(voter2);
+        ballot.castVote(voter2, 1); // Female voter
+        assertTrue(ballot.hasVoted(voter1), "Male voter should have voted");
+        assertTrue(ballot.hasVoted(voter2), "Female voter should have voted");
+        (,, uint256 votes) = ballot.candidates(1);
+        assertEq(votes, 2, "Candidate votes should be 2");
+    }
+
+    // Test voting with Male restriction
+    function testCastVoteMaleRestriction() public {
+        vm.prank(admin);
+        ballot.addCandidate("Alice");
+        ballot.restrictVotingToGender(Ballot.Gender.Male);
+        vm.prank(admin);
+        ballot.registerBalloter(voter1, true, 25, 0, true, cardExpiry);
+        ballot.registerBalloter(voter2, true, 25, 1, true, cardExpiry);
+        vm.warp(votingStart + 1);
+
+        vm.prank(voter1);
+        ballot.castVote(voter1, 1); // Male voter, should succeed
+        vm.prank(voter2);
+        vm.expectRevert(Ballot.NotMale.selector);
+        ballot.castVote(voter2, 1); // Female voter, should fail
+        (,, uint256 votes) = ballot.candidates(1);
+        assertEq(votes, 1, "Candidate votes should be 1");
+    }
+
+    // Test voting with Female restriction
+    function testCastVoteFemaleRestriction() public {
+        vm.prank(admin);
+        ballot.addCandidate("Alice");
+        ballot.restrictVotingToGender(Ballot.Gender.Female);
+        vm.prank(admin);
+        ballot.registerBalloter(voter1, true, 25, 0, true, cardExpiry);
+        ballot.registerBalloter(voter2, true, 25, 1, true, cardExpiry);
+        vm.warp(votingStart + 1);
+
+        vm.prank(voter1);
+        vm.expectRevert(Ballot.NotFemale.selector);
+        ballot.castVote(voter1, 1); // Male voter, should fail
+        vm.prank(voter2);
+        ballot.castVote(voter2, 1); // Female voter, should succeed
+        (,, uint256 votes) = ballot.candidates(1);
+        assertEq(votes, 1, "Candidate votes should be 1");
+    }
+
+    // Test invalid voting scenarios
+    function testCastVoteInvalid() public {
+        vm.prank(admin);
+        ballot.addCandidate("John");
+        vm.prank(admin);
+        ballot.registerBalloter(voter1, true, 25, 0, true, cardExpiry);
+        vm.warp(votingStart + 1);
+
+        vm.prank(voter1);
+        vm.expectRevert(Ballot.InvalidCard.selector);
+        ballot.castVote(address(0x6), 1); // Unregistered voter
+
+        vm.prank(voter1);
+        ballot.castVote(voter1, 1);
+        vm.prank(voter1);
+        vm.expectRevert(Ballot.AlreadyVoted.selector);
+        ballot.castVote(voter1, 1); // Already voted
+
+        vm.prank(voter1);
+        vm.expectRevert(Ballot.CandidateNotFound.selector);
+        ballot.castVote(voter1, 2); // Invalid candidate
+
+        vm.prank(admin);
+        ballot.registerBalloter(voter2, true, 25, 0, true, block.timestamp);
+        vm.prank(voter2);
+        vm.expectRevert(Ballot.CardExpired.selector);
+        ballot.castVote(voter2, 1); // Expired card
+    }
+
+    // Test voting outside open period
+    function testCastVoteVotingClosed() public {
+        vm.prank(admin);
+        ballot.addCandidate("Eunice");
+        vm.prank(admin);
+        ballot.registerBalloter(voter1, true, 25, 0, true, cardExpiry);
+
+        vm.prank(voter1);
+        vm.expectRevert(Ballot.VotingNotStarted.selector);
+        ballot.castVote(voter1, 1); // Before voting starts
+
+        vm.warp(votingStart + 1);
+        vm.prank(admin);
+        ballot.endVoting();
+        vm.prank(voter1);
+        vm.expectRevert(Ballot.VotingHasEnded.selector);
+        ballot.castVote(voter1, 1); // After voting ends
+    }
+
+    // Test ending voting
+    function testEndVoting() public {
+        vm.warp(votingStart + 1);
+        vm.prank(admin);
+        vm.expectEmit(true, false, false, true);
+        emit VotingEnded(block.timestamp);
+        ballot.endVoting();
+        assertTrue(ballot.votingEnded(), "Voting should be ended");
+    }
+
+    // Test invalid end voting scenarios
+    function testEndVotingInvalid() public {
+        vm.prank(admin);
+        vm.expectRevert(Ballot.VotingNotStarted.selector);
+        ballot.endVoting(); // Before voting starts
+
+        vm.warp(votingStart + 1);
+        vm.prank(admin);
+        ballot.endVoting();
+        vm.prank(admin);
+        vm.expectRevert(Ballot.VotingHasEnded.selector);
+        ballot.endVoting(); // Already ended
+
+        vm.warp(votingStart + 1);
+        vm.prank(nonAdmin);
+        vm.expectRevert(Ballot.NotAdmin.selector);
+        ballot.endVoting(); // Non-admin
+    }
+
+    // Test retrieving results
+    function testGetResults() public {
+        vm.prank(admin);
+        ballot.addCandidate("Eunice");
+        ballot.addCandidate("Oche");
+        vm.prank(admin);
+        ballot.registerBalloter(voter1, true, 25, 0, true, cardExpiry);
+        vm.warp(votingStart + 1);
+        vm.prank(voter1);
+        ballot.castVote(voter1, 1);
+        Ballot.Candidate[] memory results = ballot.getResults();
+        assertEq(results.length, 2, "Results should have 2 candidates");
+        assertEq(results[0].id, 1, "First candidate ID should be 1");
+        assertEq(results[0].name, "Eunice", "First candidate name should be Alice");
+        assertEq(results[0].votes, 1, "First candidate votes should be 1");
+        assertEq(results[1].id, 2, "Second candidate ID should be 2");
+        assertEq(results[1].name, "Oche", "Second candidate name should be Bob");
+        assertEq(results[1].votes, 0, "Second candidate votes should be 0");
+    }
+
+    // Test getting winner with clear winner
+    function testGetWinner() public {
+        vm.prank(admin);
+        ballot.addCandidate("Eunice");
+        ballot.addCandidate("Oche");
+        vm.prank(admin);
+        ballot.restrictVotingToGender(Ballot.Gender.Male);
+        vm.prank(admin);
+        ballot.registerBalloter(voter1, true, 25, 0, true, cardExpiry);
+        ballot.registerBalloter(voter2, true, 25, 1, true, cardExpiry);
+        vm.warp(votingStart + 1);
+        vm.prank(voter1);
+        ballot.castVote(voter1, 1); // Male voter
+        vm.prank(voter2);
+        vm.expectRevert(Ballot.NotMale.selector);
+        ballot.castVote(voter2, 1); // Female voter
+        vm.prank(admin);
+        ballot.endVoting();
+        (uint256 id, string memory name, uint256 votes) = ballot.getWinner();
+        assertEq(id, 1, "Winner ID should be 1");
+        assertEq(name, "Eunice", "Winner name should be Eunice");
+        assertEq(votes, 1, "Winner votes should be 1");
+    }
+
+    // Test getting winner with tied votes
+    function testGetWinnerTiedVotes() public {
+        vm.prank(admin);
+        ballot.addCandidate("Alice");
+        ballot.addCandidate("Bob");
+        vm.prank(admin);
+        ballot.registerBalloter(voter1, true, 25, 0, true, cardExpiry);
+        ballot.registerBalloter(voter2, true, 25, 0, true, cardExpiry);
+        vm.warp(votingStart + 1);
+        vm.prank(voter1);
+        ballot.castVote(voter1, 1);
+        vm.prank(voter2);
+        ballot.castVote(voter2, 2);
+        vm.prank(admin);
+        ballot.endVoting();
+        (uint256 id, string memory name, uint256 votes) = ballot.getWinner();
+        assertEq(id, 2, "Winner ID should be 2 due to tie-breaking logic");
+        assertEq(name, "Bob", "Winner name should be Bob");
+        assertEq(votes, 1, "Winner votes should be 1");
+    }
+
+    // Test getting winner with no votes
+    function testGetWinnerNoVotes() public {
+        vm.prank(admin);
+        ballot.addCandidate("Alice");
+        vm.warp(votingStart + 1);
+        vm.prank(admin);
+        ballot.endVoting();
+        (uint256 id, string memory name, uint256 votes) = ballot.getWinner();
+        assertEq(id, 1, "Winner ID should be 1");
+        assertEq(name, "Alice", "Winner name should be Alice");
+        assertEq(votes, 0, "Winner votes should be 0");
+    }
+
+    // Test invalid getWinner scenarios
+    function testGetWinnerInvalid() public {
+        vm.expectRevert(Ballot.VotingHasNotEnded.selector);
+        ballot.getWinner(); // Voting not ended
+
+        vm.prank(admin);
+        vm.warp(votingStart + 1);
+        vm.prank(admin);
+        ballot.endVoting();
+        vm.expectRevert(Ballot.CandidateNotFound.selector);
+        ballot.getWinner(); // No candidates
+    }
+
+    // Test retrieving results
+    function testGetResults() public {
+        vm.prank(admin);
+        ballot.addCandidate("Eunice");
+        ballot.addCandidate("Oche");
+        vm.prank(admin);
+        ballot.registerBalloter(voter1, true, 25, 0, true, cardExpiry);
+        vm.warp(votingStart + 1);
+        vm.prank(voter1);
+        ballot.castVote(voter1, 1);
+        Ballot.Candidate[] memory results = ballot.getResults();
+        assertEq(results.length, 2, "Results should have 2 candidates");
+        assertEq(results[0].id, 1, "First candidate ID should be 1");
+        assertEq(results[0].name, "Eunice", "First candidate name should be Alice");
+        assertEq(results[0].votes, 1, "First candidate votes should be 1");
+        assertEq(results[1].id, 2, "Second candidate ID should be 2");
+        assertEq(results[1].name, "Oche", "Second candidate name should be Bob");
+        assertEq(results[1].votes, 0, "Second candidate votes should be 0");
+    }
+
+    / Test getting winner with clear winner
+    function testGetWinner() public {
+        vm.prank(admin);
+        ballot.addCandidate("Eunice");
+        ballot.addCandidate("Oche");
+        vm.prank(admin);
+        ballot.restrictVotingToGender(Ballot.Gender.Male);
+        vm.prank(admin);
+        ballot.registerBalloter(voter1, true, 25, 0, true, cardExpiry);
+        ballot.registerBalloter(voter2, true, 25, 1, true, cardExpiry);
+        vm.warp(votingStart + 1);
+        vm.prank(voter1);
+        ballot.castVote(voter1, 1); // Male voter
+        vm.prank(voter2);
+        vm.expectRevert(Ballot.NotMale.selector);
+        ballot.castVote(voter2, 1); // Female voter
+        vm.prank(admin);
+        ballot.endVoting();
+        (uint256 id, string memory name, uint256 votes) = ballot.getWinner();
+        assertEq(id, 1, "Winner ID should be 1");
+        assertEq(name, "Eunice", "Winner name should be Eunice");
+        assertEq(votes, 1, "Winner votes should be 1");
+    }
+}
